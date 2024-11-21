@@ -1,0 +1,169 @@
+#LIBRARIES
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp, quad
+from scipy.optimize import fsolve
+from scipy.integrate import trapz
+
+# CONSTANTS
+rho = 1.225  # Air density (kg/m^3)
+CL_alpha = 5.73  # Lift coefficient slope (per radian)
+CD_0 = 0.0087  # Profile drag coefficient
+R = 8.177  # Rotor radius (m)
+A = np.pi * R**2  # Rotor disk area (m^2)
+Nb = 4  # Number of blades
+chord = 0.5401  # Mean blade chord (m)
+Ib_f = 2050.8  # Blade flapping inertia (kg·m^2)
+gamma = 8.1936  # Lock number, related to blade stiffness
+Omega = 27.0  # Rotor angular velocity (rad/s)
+eR = 1.16 # Cut-off (Data UH-60) (m)
+
+# Initial blade pitch angles (rad)
+theta_r = 0.0 * np.pi / 180  # Radial pitch offset
+theta_t = -18.0 * np.pi / 180  # Linear twist of the blade
+theta_o = 16.549 * np.pi / 180  # Collective pitch
+theta_c = 0.0 * np.pi / 180  # Cyclic pitch (cosine component)
+theta_s = 0.0 * np.pi / 180  # Cyclic pitch (sine component)
+theta_tw = -18.0 * np.pi / 180  # Total twist of the blade
+theta = theta_o -13.63*np.pi/180
+
+# Helicopter weight and derived mass
+W = 71195.86  # Helicopter weight (N)
+M = W / 9.81  # Helicopter mass (kg)
+
+# Induced flow parameters (assuming uniform inflow and no flapping hinge offset)
+C_T = W / (rho * A * Omega**2 * R**2)  # Thrust coefficient
+lambda_i_hover = -np.sqrt(C_T / 2)  # Induced velocity
+vi = lambda_i_hover * R * Omega  # Induced velocity in hover (m/s)
+print(f'Induced velocity: {vi:.2f} [m/s]')
+
+#Flapping motion in Hover
+def model(t, Ys):
+  Ml = (1/8)*rho*Omega**2*chord*CL_alpha*R**4*(theta_o - (Ys[1]/Omega) - (4*lambda_i_hover/3))
+  dY1dt = Ys[1]
+  dY2dt = Ml/Ib_f - Omega**2*Ys[0]
+  return [dY1dt, dY2dt]
+
+# Initial conditions
+Y0s = [0, 0]
+t_span = (0, 10)
+t_eval = np.linspace(0, 10, 1000)
+
+# Solve the flapping motion using RK45 method
+solution = solve_ivp(model, t_span, Y0s, t_eval=t_eval, method='RK45')
+
+time = solution.t
+Ys = solution.y
+
+fig, axs = plt.subplots(1, figsize=(10, 5))
+
+axs.plot(time, Ys[0]*180/np.pi, label="Flapping Angle (deg)", color='blue')
+axs.set_xlabel('Time [s]')
+axs.set_ylabel('Flapping angle (deg)')
+axs.set_title('Flapping Dynamics in Hover')
+axs.legend()
+axs.grid()
+plt.show()
+
+# Flapping motion in Hover with Cut-off
+def model_cutoff(t, Ys):
+  Ml = (1/2)*rho*Omega**2*chord*CL_alpha*(
+      ((3*R**4*Omega*theta - 3*R**4*Ys[1] - 4*R**3*vi)/(12*Omega)) -
+      ((3*eR**4*Omega*theta - 3*eR**4*Ys[1] - 4*eR**3*vi)/(12*Omega)))
+  dY1dt = Ys[1]
+  dY2dt = Ml/Ib_f - Omega**2*Ys[0]
+  return [dY1dt, dY2dt]
+
+Y0s = [0, 0]
+t_span = (0, 10)
+t_eval = np.linspace(0, 10, 1000)
+
+solution_cutoff = solve_ivp(model_cutoff, t_span, Y0s, t_eval=t_eval, method='RK45')
+
+time_cutoff = solution_cutoff.t
+Ys_cutoff = solution_cutoff.y
+
+fig, axs = plt.subplots(1, 1, figsize=(10, 5))
+
+flapping_angle_deg = Ys_cutoff[0]*180/np.pi
+axs.plot(time_cutoff, flapping_angle_deg, label="Flapping Angle (deg)", color='blue')
+axs.set_xlabel('Time (s)')
+axs.set_ylabel('Flapping angle (deg)')
+axs.set_title('Flapping with cutoff in hover')
+
+#Convergence analysis
+tol = 1e-3
+differences = np.abs(np.diff(flapping_angle_deg))/flapping_angle_deg[:-1]
+converged_index = np.where(differences < tol)[0]
+
+if len(converged_index) > 0:
+    start_convergence = converged_index[0] + 1
+    convergence_time = time_cutoff[start_convergence]
+    convergence_value = np.mean(flapping_angle_deg[start_convergence:])
+
+    axs.axhline(convergence_value, color='red', linestyle='--', label=f"Convergence β₀ ≈ {convergence_value:.2f}°")
+else:
+  convergence_value=0
+  convergence_time=0
+
+axs.legend()
+axs.grid()
+plt.show()
+
+def beta_0(gamma, theta_0, theta_tw, mu, theta_1s, lam):
+  return gamma*((theta_0/8)*(1 + mu**2) + (theta_tw/10)*(1 + (5/6)*mu**2) + (mu/6)*theta_1s - (lam/6))
+
+beta_0_analitic = beta_0(gamma, theta_o, theta_tw, 0, theta_s, lambda_i_hover)*180/np.pi
+beta_0_analitic
+
+diff = np.abs(beta_0_analitic-convergence_value)
+diff #Difference between the analytical and the numerical solution
+
+#Lift
+def dL(r):
+  UT = Omega*r
+  vi_r = lambda_i_hover*Omega*r
+  theta_twist = theta_t*(r/R)
+  theta_r = theta_o + theta_twist
+  lift = 0.5*rho*chord*CL_alpha*(theta_r*UT**2 - vi_r*UT)
+  return lift
+
+# Integrate lift over blade span
+L_blade, _ = quad(dL, 0.02*R, R, limit=100)  # Avoiding  r=0
+T = Nb*L_blade
+
+print(f'Thrust generated : {L_blade:.2f} N')
+print(f'Rotor Thrust generated : {T:.2f} N')
+print(f'Difference: {np.abs(W - T):.2f} N')
+
+sigma = Nb*chord/(np.pi*R)
+C_P = -lambda_i_hover*C_T + (sigma*CD_0)/8
+P_total = C_P*rho*A*Omega**3*R**3/1000  # Total power (kW)
+Q_total = C_P*rho*A*Omega**2*R**3  # Total torque (Nm)
+
+print(f'Power required : {P_total:.2f} kW')
+print(f'Torque required : {Q_total:.2f} Nm')
+
+k = 1.26  # Correction factor by Leishman to account for non-uniform inflow and induced effects
+
+# Power required by the rotor is divided into two components:
+# 1. Induced power: Power required to generate lift and overcome induced drag.
+# 2. Parasite power: Power required to overcome profile drag due to the blade's motion through the air.
+
+C_P_induced = -lambda_i_hover*C_T*k
+C_P_parasite = (sigma*CD_0)/8
+
+# Total power coefficient
+C_P_total = C_P_induced + C_P_parasite
+
+# Power
+P_total = C_P_total*rho*A*Omega**3*R**3/1000
+Q_total = C_P_total*rho*A*Omega**2*R**3
+
+P_induced = C_P_induced*rho*A*Omega**3*R**3/1000
+P_parasite = C_P_parasite*rho*A*Omega**3*R**3/1000
+
+print(f"Induced power: {P_induced:.2f} kW")
+print(f"Parasite power: {P_parasite:.2f} kW")
+print(f"Total power: {P_total:.2f} kW")
+print(f"Total torque: {Q_total:.2f} Nm")
