@@ -1,0 +1,147 @@
+#LIBRARIES
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp, quad
+from scipy.optimize import fsolve
+from scipy.integrate import trapz
+
+# CONSTANTS
+rho = 1.225  # Air density (kg/m^3)
+CL_alpha = 5.73  # Lift coefficient slope (per radian)
+CD_0 = 0.0087  # Profile drag coefficient
+R = 8.177  # Rotor radius (m)
+A = np.pi * R**2  # Rotor disk area (m^2)
+Nb = 4  # Number of blades
+chord = 0.5401  # Mean blade chord (m)
+Ib_f = 2050.8  # Blade flapping inertia (kg·m^2)
+gamma = 8.1936  # Lock number, related to blade stiffness
+Omega = 27.0  # Rotor angular velocity (rad/s)
+eR = 1.16 # Cut-off (Data UH-60) (m)
+
+# Initial blade pitch angles (rad)
+theta_r = 0.0 * np.pi / 180  # Radial pitch offset
+theta_t = -18.0 * np.pi / 180  # Linear twist of the blade
+theta_o = 16.549 * np.pi / 180  # Collective pitch
+theta_c = 0.0 * np.pi / 180  # Cyclic pitch (cosine component)
+theta_s = 0.0 * np.pi / 180  # Cyclic pitch (sine component)
+theta_tw = -18.0 * np.pi / 180  # Total twist of the blade
+theta = theta_o -13.63*np.pi/180
+
+# Helicopter weight and derived mass
+W = 71195.86  # Helicopter weight (N)
+M = W / 9.81  # Helicopter mass (kg)
+
+# CONSTANTS
+
+mu = 0.15
+vinf = 64*0.515 # knots
+theta_o = 18*np.pi/180 # rad
+theta_s = -2*np.pi/180 # rad
+theta_tw = -18*np.pi/180 # rad
+alpha_forward_flight = -2*np.pi/180 # rad
+
+# Flapping motion in Forward Flight
+def model_forward_flight(t, Ys):
+  ys = np.linspace(eR, R, 1000)
+  ut = Omega*ys + vinf*np.cos(theta)*np.sin(Omega*t)
+  up = vinf*np.sin(theta) + vi
+  L_values = 0.5*rho*ut**2*chord*CL_alpha*(theta - Ys[1]*ys/ut - up/ut)*ys
+  Ml = trapz(L_values, ys)
+  dY1dt = Ys[1]
+  dY2dt = Ml/Ib_f - Omega**2*Ys[0]
+  return [dY1dt, dY2dt]
+
+Y0 = [0, 0]
+t_span = (0, 10)
+ts = np.linspace(0, 10, 1000)
+
+solution = solve_ivp(model_forward_flight, t_span, Y0s, t_eval=ts, method='RK45')
+
+time = solution.t
+Ys = solution.y
+
+fig, axs = plt.subplots(1, figsize=(10, 5))
+ax = axs
+
+axs.plot(time, Ys[0]*180/np.pi, label = 'Flapping angle (deg)', color='blue')
+axs.set_xlabel("Time (s)")
+axs.set_ylabel("Flapping angle (deg)")
+axs.set_title("Flapping in Forward Flight")
+plt.legend()
+plt.grid()
+plt.show()
+
+fig, axs = plt.subplots(1, figsize=(10, 5))
+ax = axs
+
+axs.plot(time, Ys[1]*180/np.pi, label = 'Angular velocity (deg/s)', color='blue')
+axs.set_xlabel("Time [s]")
+axs.set_ylabel("Angular Velocity (deg/s)")
+axs.set_title("Angular Velocity in Forward Flight")
+plt.legend()
+plt.grid()
+plt.show()
+
+dt = np.diff(time)
+angular_velocity = Ys[1]
+acceleration = np.diff(angular_velocity)/dt
+time_acceleration = time[:-1]
+
+fig, axs = plt.subplots(1, figsize=(10, 5))
+ax = axs
+
+axs.plot(time_acceleration, acceleration, label = 'Angular Acceleration (deg/s^2)', color='blue')
+axs.set_xlabel("Time (s)")
+axs.set_ylabel("Angular Acceleration (deg/s^2)")
+axs.set_title("Angular Acceleration in Forward Flight")
+plt.legend()
+plt.grid()
+plt.show()
+
+def beta_0(gamma, theta_0, theta_tw, mu, theta_1s, lam):
+  return gamma*((theta_0/8)*(1 + mu**2) + (theta_tw/10)*(1 + (5/6)*mu**2) + (mu/6)*theta_1s - (lam/6)) # as defined previously
+
+def beta_1c(mu, beta_0, lam, theta_1s, theta_tw):
+  return (8/3)*mu*(beta_0 - (3/4)*lam + (3/4)*mu*theta_1s + (3/4)*theta_tw)/(1 - 0.5*mu**2) - theta_1s
+
+def beta_1s(mu, beta_0, theta_1c):
+  return (-4/3)*mu*beta_0/(1 + 0.5*mu**2) + theta_1c
+
+def Lambda(lam, mu, alpha, C_T):
+  return lam - (mu*np.tan(alpha) + C_T/(2*np.sqrt(mu**2 + lam**2)))
+
+lambda_forward_flight = -fsolve(Lambda, 1, args=(mu, alpha_forward_flight, C_T))[0]
+lambda_forward_flight
+
+beta_0 = beta_0(gamma, theta_o, theta_tw, theta_s, mu, lambda_forward_flight)
+beta_1s = beta_1s(mu, beta_0, theta_s)
+beta_1c = beta_1c(mu, beta_0, lambda_forward_flight, theta_s, theta_tw)
+
+beta_0_deg = beta_0*180/np.pi
+beta_1s_deg = beta_1s*180/np.pi
+beta_1c_deg = beta_1c*180/np.pi
+
+print("Beta 0:", beta_0_deg)
+print("Beta 1s:", beta_1s_deg)
+print("Beta 1c:", beta_1c_deg)
+
+t = np.linspace(0, 10, 10000)
+
+beta = beta_0 + beta_1c*np.cos(Omega*t) + beta_1s*np.sin(Omega*t)
+beta_deg = beta*180/np.pi
+
+fig, axs = plt.subplots(1, figsize=(10, 5))
+ax = axs
+
+axs.plot(t, beta_deg, label = 'Sum of beta(s)')
+#axs.plot(time, Ys[0]*180/np.pi, label = 'Flapping angle (deg)', color='blue')
+axs.axhline(beta_0_deg, color='r', linestyle='--', label=f'beta_0 = {beta_0_deg:.2f}°')
+axs.axhline(beta_1s_deg, color='g', linestyle='--', label=f'beta_1s = {beta_1s_deg:.2f}°')
+axs.axhline(beta_1c_deg, color='b', linestyle='--', label=f'beta_1c = {beta_1c_deg:.2f}°')
+
+axs.set_xlabel("Time (s)")
+axs.set_ylabel("Beta (deg)")
+axs.set_title("Beta comparison")
+plt.legend(loc='lower right')
+plt.grid()
+plt.show()
